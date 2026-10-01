@@ -1,23 +1,35 @@
 # AGY Limits Bar
 
-A lightweight, native macOS menu bar application (Status Bar App) that tracks your Google Antigravity (AGY) API limits and active account in real-time. 
+Легкое нативное приложение для строки меню (Menu Bar) macOS, которое в реальном времени отслеживает ваши лимиты в Google Antigravity (AGY) и показывает текущий активный аккаунт.
 
-## Features
-- Displays a dynamic lightning bolt icon in the status bar that changes color based on your remaining 5-hour quota.
-- Shows your current active `agy` account so you always know which quota you are burning.
-- Fetches real-time quota data via the `agy` CLI.
-- Fully native SwiftUI `MenuBarExtra` application.
+## Особенности
+- ⚡️ **Динамическая иконка:** Молния в строке меню меняет цвет в зависимости от оставшегося 5-часового лимита (зеленый, желтый, оранжевый, красный).
+- 👤 **Текущий аккаунт:** Приложение показывает ваш активный аккаунт `agy`, чтобы вы всегда знали, с какого профиля в данный момент списываются токены.
+- 🔄 **Автообновление:** Данные о квотах автоматически запрашиваются в фоне через CLI-утилиту `agy`.
+- 🍎 **Нативный интерфейс:** Приложение написано на Swift с использованием современного SwiftUI `MenuBarExtra`.
 
-## How to Build & Run
-Simply execute the included shell script:
+## Требования
+- macOS 13.0 или новее.
+- Установленная локально утилита `agy` (Antigravity CLI).
+
+## Установка и сборка
+Собрать приложение из исходного кода очень просто. Откройте терминал, перейдите в папку с проектом и выполните скрипт:
+
 ```bash
 ./build_app.sh
 ```
-This will compile the Swift code, create an `.app` bundle, and you can run it directly:
+
+Скрипт скомпилирует исходный код и создаст готовое приложение `AGY Limits Bar.app`. 
+Запустить его можно прямо из терминала:
 ```bash
 open "AGY Limits Bar.app"
 ```
+*(Или просто найдите файл `AGY Limits Bar.app` в Finder и запустите его двойным кликом)*.
 
-## Requirements
-- macOS 13.0 or later.
-- `agy` (Antigravity CLI) installed locally.
+## Автозапуск при включении Mac
+Чтобы приложение автоматически запускалось каждый раз при старте системы:
+1. Откройте **Системные настройки** (System Settings) на вашем Mac.
+2. Перейдите в раздел **Основные** (General) -> **Объекты входа** (Login Items).
+3. В разделе "Открывать при входе" нажмите на кнопку **+** (Плюс).
+4. В открывшемся окне найдите и выберите файл `AGY Limits Bar.app`, который вы собрали на предыдущем шаге.
+5. Готово! Теперь ваши лимиты всегда будут под рукой в строке меню сразу после включения компьютера.
