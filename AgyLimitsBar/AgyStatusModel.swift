@@ -14,11 +14,23 @@ struct CreditsInfo {
     var upgradeURL: String
 }
 
+struct AgyProfile: Hashable, Equatable, Identifiable {
+    var id: String { name }
+    let name: String
+    let homePath: String
+}
+
+struct ProfileData: Identifiable {
+    var id: String { profile.id }
+    let profile: AgyProfile
+    var quotaEntries: [QuotaEntry]
+    var credits: CreditsInfo
+}
+
 @MainActor
 class AgyStatusModel: ObservableObject {
-    @Published var quotaEntries: [QuotaEntry] = []
-    @Published var credits: CreditsInfo = CreditsInfo(remaining: 0, upgradeURL: "")
-    @Published var activeAccount: String? = nil
+    @Published var profilesData: [ProfileData] = []
+    @Published var availableProfiles: [AgyProfile] = []
     @Published var isLoading: Bool = false
     @Published var lastError: String? = nil
     @Published var lastUpdated: Date? = nil
@@ -49,47 +61,79 @@ class AgyStatusModel: ObservableObject {
         }
     }
 
+    func loadProfiles() {
+        var profiles: [AgyProfile] = []
+        let fm = FileManager.default
+        let homeDir = URL(fileURLWithPath: NSHomeDirectory())
+        
+        // 1. Default profile
+        profiles.append(AgyProfile(name: "agy", homePath: homeDir.path))
+        
+        // 2. Additional profiles
+        if let contents = try? fm.contentsOfDirectory(at: homeDir, includingPropertiesForKeys: nil) {
+            for url in contents {
+                if url.lastPathComponent.hasPrefix(".agy-profile-") {
+                    let geminiDir = url.appendingPathComponent(".gemini")
+                    if fm.fileExists(atPath: geminiDir.path) {
+                        let num = url.lastPathComponent.replacingOccurrences(of: ".agy-profile-", with: "")
+                        let name = "agy" + num
+                        profiles.append(AgyProfile(name: name, homePath: url.path))
+                    }
+                }
+            }
+        }
+        
+        self.availableProfiles = profiles.sorted { $0.name < $1.name }
+    }
+
     func refresh() async {
         isLoading = true
         lastError = nil
         
-        // Fetch active account
-        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".gemini/google_accounts.json")
-        if let data = try? Data(contentsOf: url),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let active = json["active"] as? String {
-            self.activeAccount = active
-        } else {
-            self.activeAccount = nil
+        loadProfiles()
+        
+        let profilesToFetch = Array(availableProfiles.prefix(3))
+        var newProfilesData: [ProfileData] = []
+        
+        await withTaskGroup(of: ProfileData?.self) { group in
+            for p in profilesToFetch {
+                group.addTask {
+                    async let usageResult = Self.runAgy(args: ["--dangerously-skip-permissions", "-p", "/usage"], homePath: p.homePath, cliPath: self.agyCLIPath)
+                    async let creditsResult = Self.runAgy(args: ["--dangerously-skip-permissions", "-p", "/credits"], homePath: p.homePath, cliPath: self.agyCLIPath)
+                    
+                    let (usageOut, creditsOut) = await (usageResult, creditsResult)
+                    
+                    var data = ProfileData(profile: p, quotaEntries: [], credits: CreditsInfo(remaining: 0, upgradeURL: ""))
+                    if let u = usageOut { data.quotaEntries = Self.parseQuota(u) }
+                    if let c = creditsOut { data.credits = Self.parseCredits(c) }
+                    
+                    return data
+                }
+            }
+            
+            for await result in group {
+                if let data = result {
+                    newProfilesData.append(data)
+                }
+            }
         }
         
-        async let usageResult = runAgy(args: ["--dangerously-skip-permissions", "-p", "/usage"])
-        async let creditsResult = runAgy(args: ["--dangerously-skip-permissions", "-p", "/credits"])
-        
-        let (usageOutput, creditsOutput) = await (usageResult, creditsResult)
-        
-        if let output = usageOutput {
-            quotaEntries = parseQuota(output)
-        }
-        if let output = creditsOutput {
-            credits = parseCredits(output)
-        }
+        self.profilesData = newProfilesData.sorted { $0.profile.name < $1.profile.name }
         
         lastUpdated = Date()
         isLoading = false
     }
 
-    private func runAgy(args: [String]) async -> String? {
+    nonisolated private static func runAgy(args: [String], homePath: String, cliPath: String) async -> String? {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: self.agyCLIPath)
+                process.executableURL = URL(fileURLWithPath: cliPath)
                 process.arguments = args
                 
                 // Pass through the user environment so agy finds its config
                 var env = ProcessInfo.processInfo.environment
-                // Ensure HOME is set correctly
-                env["HOME"] = NSHomeDirectory()
+                env["HOME"] = homePath
                 process.environment = env
 
                 let pipe = Pipe()
@@ -113,7 +157,7 @@ class AgyStatusModel: ObservableObject {
     // Quota:
     // Gemini Models          Weekly Limit Remaining     82%  2026-10-07T08:32:47Z
     // Gemini Models          Five Hour Limit Remaining  0%   2026-10-01T11:23:38Z
-    private func parseQuota(_ output: String) -> [QuotaEntry] {
+    nonisolated private static func parseQuota(_ output: String) -> [QuotaEntry] {
         var entries: [QuotaEntry] = []
         let lines = output.components(separatedBy: "\n")
         
@@ -158,7 +202,7 @@ class AgyStatusModel: ObservableObject {
     // Model credits
     // Remaining credits  0
     // Upgrade  https://...
-    private func parseCredits(_ output: String) -> CreditsInfo {
+    nonisolated private static func parseCredits(_ output: String) -> CreditsInfo {
         var remaining = 0
         var url = ""
         
@@ -181,7 +225,8 @@ class AgyStatusModel: ObservableObject {
 
     /// The "worst" remaining quota across all 5-hour limits (for menu bar icon)
     var criticalPercent: Int? {
-        let fiveHour = quotaEntries.filter { $0.limitType.lowercased().contains("five hour") || $0.limitType.lowercased().contains("5 hour") }
+        let allEntries = profilesData.flatMap { $0.quotaEntries }
+        let fiveHour = allEntries.filter { $0.limitType.lowercased().contains("five hour") || $0.limitType.lowercased().contains("5 hour") }
         return fiveHour.map { $0.percent }.min()
     }
 }

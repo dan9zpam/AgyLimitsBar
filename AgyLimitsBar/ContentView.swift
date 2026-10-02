@@ -50,68 +50,24 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, model.activeAccount == nil ? 10 : 2)
-
-            if let account = model.activeAccount {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.circle")
-                        .foregroundStyle(.secondary)
-                        .font(.caption2)
-                    Text(account)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-            }
+            .padding(.vertical, 14)
 
             Divider()
 
-            // Quota section
-            if model.quotaEntries.isEmpty && !model.isLoading {
-                Text("No quota data available")
+            if model.profilesData.isEmpty && !model.isLoading {
+                Text("No data available")
                     .foregroundStyle(.secondary)
                     .font(.caption)
                     .padding()
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.quotaEntries) { entry in
-                        QuotaRow(entry: entry)
+                HStack(alignment: .top, spacing: 20) {
+                    ForEach(model.profilesData) { profileData in
+                        ProfileColumnView(profileData: profileData)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-
-            Divider()
-
-            // Credits section
-            HStack {
-                Image(systemName: "creditcard.fill")
-                    .foregroundStyle(.purple)
-                    .font(.caption)
-                Text("AI Credits")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(model.credits.remaining)")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(model.credits.remaining == 0 ? .red : .primary)
-                if !model.credits.upgradeURL.isEmpty {
-                    Button("Buy") {
-                        if let url = URL(string: model.credits.upgradeURL) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .foregroundStyle(.blue)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
 
             Divider()
 
@@ -133,7 +89,49 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .frame(width: 380)
+        .frame(width: CGFloat(max(320, model.profilesData.count * 240)))
+    }
+}
+
+struct ProfileColumnView: View {
+    let profileData: ProfileData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.circle.fill")
+                    .foregroundStyle(.secondary)
+                Text(profileData.profile.name)
+                    .font(.subheadline)
+                    .bold()
+            }
+            
+            if profileData.quotaEntries.isEmpty {
+                Text("No quota available")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } else {
+                ForEach(profileData.quotaEntries) { entry in
+                    QuotaRow(entry: entry)
+                }
+            }
+            
+            Divider()
+            
+            HStack {
+                Image(systemName: "creditcard.fill")
+                    .foregroundStyle(.purple)
+                    .font(.caption2)
+                Text("Credits")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(profileData.credits.remaining)")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(profileData.credits.remaining == 0 ? .red : .primary)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -162,6 +160,12 @@ struct QuotaRow: View {
         return entry.resetDate
     }
 
+    private var statusText: String {
+        if entry.percent < 20 { return "LOW" }
+        if entry.percent < 50 { return "OK" }
+        return "GOOD"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
@@ -179,7 +183,7 @@ struct QuotaRow: View {
                     }
                 }
                 Spacer()
-                Text("\(entry.percent)%")
+                Text(statusText)
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundStyle(barColor)
             }
