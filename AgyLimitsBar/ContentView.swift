@@ -161,9 +161,9 @@ struct QuotaRow: View {
     }
 
     private var statusText: String {
-        if entry.percent < 20 { return "LOW" }
-        if entry.percent < 50 { return "OK" }
-        return "GOOD"
+        if entry.percent < 20 { return "\(entry.percent)%" }
+        if entry.percent < 50 { return "\(entry.percent)%" }
+        return "\(entry.percent)%"
     }
 
     var body: some View {
