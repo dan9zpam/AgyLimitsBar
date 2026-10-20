@@ -9,9 +9,9 @@
     <key>CFBundleDisplayName</key>
     <string>AGY Limits Bar</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1.0</string>
     <key>CFBundleExecutable</key>
     <string>AgyLimitsBar</string>
     <key>CFBundlePackageType</key>

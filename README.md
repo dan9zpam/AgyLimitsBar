@@ -1,24 +1,72 @@
-# AGY Limits Bar
+# AGY Limits Bar (macOS & Windows)
 
-AGY Limits Bar is a menu bar utility for macOS (and system tray app for Windows) that displays your current limits and quotas for Google Antigravity (agy).
+<p align="center">
+  <b>Нативная утилита Menu Bar для macOS и системного трея Windows для отслеживания квот и лимитов Google Antigravity (AGY) в реальном времени.</b>
+</p>
 
-## macOS Installation
+---
 
-1. **Prerequisites:** Ensure you have the `agy` CLI installed and authenticated.
-2. **Build and Run:**
-   - Clone the repository.
-   - Run the `./build_app.sh` script to compile the Swift application.
-   - It will generate an `AGY Limits Bar.app` bundle in the directory.
-   - Open `AGY Limits Bar.app`.
-   - Optional: Drag the `.app` bundle to your `Applications` folder and add it to Login Items (System Settings -> General -> Login Items) to start automatically.
+## Возможности
 
-## Windows Installation (Portable)
+- **Индикатор в строке меню:** компактный динамический процент оставшихся квот прямо в Menu Bar (зеленый / желтый / красный статус).
+- **Раздельный учет лимитов:**
+  - **Gemini Models:** 5-часовой спринт и недельный резерв.
+  - **Claude & GPT Models:** оперативный 5-часовой лимит и недельная квота.
+- **Умный обратный отсчет:** точный расчет времени до сброса квот (*«сброс через 45м»*, *«сброс через 1ч 20м»*).
+- **Мульти-профильность:** автоматическое обнаружение и поддержка нескольких профилей `agy` (`~/.agy-profile-*`).
+- **Баланс кредитов:** быстрый просмотр оставшихся Model Credits.
+- **Быстрый доступ к CLI:** кнопка мгновенного запуска `agy` в терминале.
+- **Современный нативный дизайн:** стеклянный интерфейс в стиле macOS Sonoma / Sequoia с поддержкой светлой и темной темы.
 
-A self-contained, portable Windows executable (`AgyLimitsWindows.exe`) is available in the `AgyLimitsWindows` folder.
+---
 
-1. **Download:** Go to the `AgyLimitsWindows` folder and download `AgyLimitsWindows.zip`.
-2. **Extract:** Extract the `.zip` file to get `AgyLimitsWindows.exe`.
-3. **Run:** Double-click `AgyLimitsWindows.exe`. It will run in the system tray (bottom right, near the clock).
-4. **Prerequisites:** Ensure the `agy` CLI is installed on Windows and accessible in your command line. The app dynamically searches for `~/.gemini` and `~/.agy-profile-*` folders in your `%USERPROFILE%`.
+## Установка на macOS
 
-*Note: The Windows executable is large (~100 MB) because it packages the entire .NET runtime inside it, making it completely portable without requiring any .NET installations.*
+### Способ 1: Через Homebrew (рекомендуется)
+
+Установка в один клик через официальный тап:
+
+```bash
+brew install --cask dan9zpam/tap/agylimit
+```
+
+Или с добавлением репозитория:
+```bash
+brew tap dan9zpam/tap
+brew install --cask agylimit
+```
+
+### Способ 2: Скачать готовый релиз
+
+1. Перейдите в раздел [Releases](https://github.com/dan9zpam/AgyLimitsBar/releases/latest).
+2. Скачайте архив **`AgyLimitsBar-v1.1.0.zip`**.
+3. Распакуйте и перетащите `AGY Limits Bar.app` в папку **Программы** (`/Applications`).
+4. Запустите приложение.
+
+*(Для автозапуска при включении Mac: «Системные настройки» ➔ «Основные» ➔ «Объекты входа» ➔ добавьте AGY Limits Bar).*
+
+### Способ 3: Сборка из исходников
+
+```bash
+git clone https://github.com/dan9zpam/AgyLimitsBar.git
+cd AgyLimitsBar
+./build_app.sh
+open "AGY Limits Bar.app"
+```
+
+---
+
+## Установка на Windows
+
+Для Windows доступна портативная сборка для системного трея (около часов):
+
+1. Скачайте `AgyLimitsWindows.zip` из папки `AgyLimitsWindows` или раздела [Releases](https://github.com/dan9zpam/AgyLimitsBar/releases).
+2. Распакуйте архив и запустите `AgyLimitsWindows.exe`.
+3. Приложение свернется в системный трей и будет отображать текущие лимиты активного профиля.
+
+---
+
+## Требования
+
+* **macOS 13.0 (Ventura) или новее** / **Windows 10/11**
+* Установленный и авторизованный CLI `agy` (Google Antigravity).

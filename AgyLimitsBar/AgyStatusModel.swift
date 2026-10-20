@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 struct QuotaEntry: Identifiable {
     let id = UUID()
@@ -7,6 +8,14 @@ struct QuotaEntry: Identifiable {
     let limitType: String
     let percent: Int
     let resetDate: String
+
+    var isFiveHour: Bool {
+        limitType.lowercased().contains("five hour") || limitType.lowercased().contains("5 hour")
+    }
+
+    var friendlyReset: String {
+        AgyStatusModel.friendlyReset(resetDate)
+    }
 }
 
 struct CreditsInfo {
@@ -25,6 +34,14 @@ struct ProfileData: Identifiable {
     let profile: AgyProfile
     var quotaEntries: [QuotaEntry]
     var credits: CreditsInfo
+
+    var geminiEntries: [QuotaEntry] {
+        quotaEntries.filter { $0.model.localizedCaseInsensitiveContains("gemini") }
+    }
+
+    var claudeAndGptEntries: [QuotaEntry] {
+        quotaEntries.filter { !$0.model.localizedCaseInsensitiveContains("gemini") }
+    }
 }
 
 @MainActor
@@ -35,17 +52,23 @@ class AgyStatusModel: ObservableObject {
     @Published var lastError: String? = nil
     @Published var lastUpdated: Date? = nil
 
+    @Published var selectedProfileForMenuBar: String {
+        didSet {
+            UserDefaults.standard.set(selectedProfileForMenuBar, forKey: "selectedProfileForMenuBar")
+        }
+    }
+
     private var timer: Timer?
     private let agyCLIPath: String
 
     init() {
-        // Try common locations for agy binary
+        self.selectedProfileForMenuBar = UserDefaults.standard.string(forKey: "selectedProfileForMenuBar") ?? "All"
         let candidates = [
-            "/Users/\(NSUserName())/.local/bin/agy",
+            "\(NSHomeDirectory())/.local/bin/agy",
             "/usr/local/bin/agy",
             "/opt/homebrew/bin/agy"
         ]
-        self.agyCLIPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) ?? "/usr/local/bin/agy"
+        self.agyCLIPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) ?? "\(NSHomeDirectory())/.local/bin/agy"
         
         Task { await self.refresh() }
         startTimer()
@@ -53,7 +76,6 @@ class AgyStatusModel: ObservableObject {
 
     func startTimer() {
         timer?.invalidate()
-        // Refresh every 60 seconds
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.refresh()
@@ -92,7 +114,7 @@ class AgyStatusModel: ObservableObject {
         
         loadProfiles()
         
-        let profilesToFetch = Array(availableProfiles.prefix(3))
+        let profilesToFetch = Array(availableProfiles.prefix(4))
         var newProfilesData: [ProfileData] = []
         
         await withTaskGroup(of: ProfileData?.self) { group in
@@ -119,9 +141,16 @@ class AgyStatusModel: ObservableObject {
         }
         
         self.profilesData = newProfilesData.sorted { $0.profile.name < $1.profile.name }
-        
         lastUpdated = Date()
         isLoading = false
+    }
+
+    func openTerminal() {
+        let script = "tell application \"Terminal\" to do script \"agy\" activate"
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
     }
 
     nonisolated private static func runAgy(args: [String], homePath: String, cliPath: String) async -> String? {
@@ -131,7 +160,6 @@ class AgyStatusModel: ObservableObject {
                 process.executableURL = URL(fileURLWithPath: cliPath)
                 process.arguments = args
                 
-                // Pass through the user environment so agy finds its config
                 var env = ProcessInfo.processInfo.environment
                 env["HOME"] = homePath
                 process.environment = env
@@ -153,10 +181,6 @@ class AgyStatusModel: ObservableObject {
         }
     }
 
-    // Parses output like:
-    // Quota:
-    // Gemini Models          Weekly Limit Remaining     82%  2026-10-07T08:32:47Z
-    // Gemini Models          Five Hour Limit Remaining  0%   2026-10-01T11:23:38Z
     nonisolated private static func parseQuota(_ output: String) -> [QuotaEntry] {
         var entries: [QuotaEntry] = []
         let lines = output.components(separatedBy: "\n")
@@ -165,7 +189,6 @@ class AgyStatusModel: ObservableObject {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.lowercased().hasPrefix("quota") else { continue }
             
-            // agy outputs TSV when piped/non-TTY
             let parts = trimmed.components(separatedBy: "\t")
             if parts.count >= 4 {
                 let model = parts[0].trimmingCharacters(in: .whitespaces)
@@ -177,8 +200,7 @@ class AgyStatusModel: ObservableObject {
                 continue
             }
             
-            // Fallback for space-padded TTY output
-            let pattern = #"^(.+?)\s{2,}(.+?)\s{2,}(\d+)%\s+(\S+)\s*$"#
+            let pattern = #"^(.+?)\s{2,}(.+?)\s{2,}(\d+)%\s+(.+)$"#
             if let regex = try? NSRegularExpression(pattern: pattern),
                let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
                 
@@ -198,10 +220,6 @@ class AgyStatusModel: ObservableObject {
         return entries
     }
 
-    // Parses:
-    // Model credits
-    // Remaining credits  0
-    // Upgrade  https://...
     nonisolated private static func parseCredits(_ output: String) -> CreditsInfo {
         var remaining = 0
         var url = ""
@@ -223,10 +241,51 @@ class AgyStatusModel: ObservableObject {
         return CreditsInfo(remaining: remaining, upgradeURL: url)
     }
 
-    /// The "worst" remaining quota across all 5-hour limits (for menu bar icon)
+    nonisolated static func friendlyReset(_ str: String) -> String {
+        let f1 = ISO8601DateFormatter()
+        if let d = f1.date(from: str) {
+            return formatRelative(d)
+        }
+        let parts = str.components(separatedBy: " ")
+        if parts.count >= 2 {
+            let dtPart = "\(parts[0]) \(parts[1])"
+            let f2 = DateFormatter()
+            f2.locale = Locale(identifier: "en_US_POSIX")
+            f2.dateFormat = "yyyy-MM-dd HH:mm"
+            if parts.count >= 3 && parts[2] == "MSK" {
+                f2.timeZone = TimeZone(identifier: "Europe/Moscow")
+            }
+            if let d = f2.date(from: dtPart) {
+                return formatRelative(d)
+            }
+        }
+        return str
+    }
+
+    nonisolated static func formatRelative(_ targetDate: Date) -> String {
+        let now = Date()
+        let diff = targetDate.timeIntervalSince(now)
+        if diff <= 0 { return "сейчас" }
+        let hours = Int(diff) / 3600
+        let minutes = (Int(diff) % 3600) / 60
+        if hours > 24 {
+            let days = hours / 24
+            return "\(days)д \(hours % 24)ч"
+        } else if hours > 0 {
+            return "\(hours)ч \(minutes)м"
+        } else {
+            return "\(max(1, minutes))м"
+        }
+    }
+
     var criticalPercent: Int? {
-        let allEntries = profilesData.flatMap { $0.quotaEntries }
-        let fiveHour = allEntries.filter { $0.limitType.lowercased().contains("five hour") || $0.limitType.lowercased().contains("5 hour") }
+        let entries: [QuotaEntry]
+        if selectedProfileForMenuBar == "All" {
+            entries = profilesData.flatMap { $0.quotaEntries }
+        } else {
+            entries = profilesData.first(where: { $0.profile.name == selectedProfileForMenuBar })?.quotaEntries ?? []
+        }
+        let fiveHour = entries.filter { $0.isFiveHour }
         return fiveHour.map { $0.percent }.min()
     }
 }

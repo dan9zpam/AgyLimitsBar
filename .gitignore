@@ -4,3 +4,10 @@
 build/
 *.xcodeproj/project.xcworkspace/
 *.xcodeproj/xcuserdata/
+scratch_win/
+*.user
+bin/
+obj/
+AgyLimitsWindows/AgyLimitsWindows.zip
+find_profiles.swift
+test_profiles.swift
