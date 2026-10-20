@@ -29,6 +29,10 @@ cp "${BINARY_PATH}" "${APP_BUNDLE}/Contents/MacOS/${BINARY_NAME}"
 # Copy plist
 cp "${SCRIPT_DIR}/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 
+# Code sign (ad-hoc)
+echo "🔏 Ad-hoc signing app bundle..."
+codesign --force --deep --sign - "${APP_BUNDLE}"
+
 echo "✅ Done! App bundle created at:"
 echo "   ${APP_BUNDLE}"
 echo ""
