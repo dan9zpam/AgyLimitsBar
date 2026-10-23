@@ -13,11 +13,7 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            AnimatedBrandIcon(
-                provider: model.isClaudeSelected ? "claude" : "agy",
-                state: model.activeAgentState,
-                size: 14
-            )
+            Image(nsImage: model.menuBarIcon)
             
             if let pct = model.criticalPercent {
                 Text("\(pct)%")
@@ -97,11 +93,7 @@ struct ContentView: View {
                         )
                         .frame(width: 28, height: 28)
                     
-                    AnimatedBrandIcon(
-                        provider: selectedFilter == .claude ? "claude" : "agy",
-                        state: model.activeAgentState,
-                        size: 15
-                    )
+                    Image(nsImage: selectedFilter == .claude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -168,7 +160,7 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: 180)
                 .padding(.vertical, 32)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -222,7 +214,7 @@ struct ContentView: View {
             .padding(.vertical, 9)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
         }
-        .frame(width: CGFloat(max(340, min(860, filteredProfiles.count * 280))))
+        .frame(minWidth: 340, idealWidth: CGFloat(max(340, min(860, max(1, filteredProfiles.count) * 280))), minHeight: 280)
     }
 }
 
@@ -246,11 +238,7 @@ struct ProfileCardView: View {
                     .fill(profileData.isAuthenticated ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
                 
-                AnimatedBrandIcon(
-                    provider: profileData.isClaude ? "claude" : "agy",
-                    state: model.activeAgentState,
-                    size: 13
-                )
+                Image(nsImage: profileData.isClaude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
 
                 Text(profileData.profile.displayName)
                     .font(.system(size: 13, weight: .bold))
@@ -380,11 +368,9 @@ struct ModelSectionView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
                 if icon == "claude" {
-                    Image(nsImage: BrandIcons.claudeImage(size: 12))
-                        .renderingMode(.original)
+                    Image(nsImage: BrandIcons.clawdIdle)
                 } else if icon == "googlegemini" {
-                    Image(nsImage: BrandIcons.geminiImage(size: 12))
-                        .renderingMode(.original)
+                    Image(nsImage: BrandIcons.geminiIdle)
                 } else {
                     Image(systemName: icon)
                         .font(.system(size: 10, weight: .bold))

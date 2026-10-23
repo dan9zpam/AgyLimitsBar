@@ -63,6 +63,7 @@ class AgyStatusModel: ObservableObject {
     @Published var lastError: String? = nil
     @Published var lastUpdated: Date? = nil
     @Published var activeAgentState: AgentState = .idle
+    @Published var animFrame: Int = 0
 
     @Published var selectedProfileForMenuBar: String {
         didSet {
@@ -71,8 +72,9 @@ class AgyStatusModel: ObservableObject {
         }
     }
 
-    private var timer: Timer?
+    private var refreshTimer: Timer?
     private var stateTimer: Timer?
+    private var animTimer: Timer?
     private let agyCLIPath: String
     private let claudeCLIPath: String
 
@@ -103,12 +105,12 @@ class AgyStatusModel: ObservableObject {
             await self.refresh()
             self.updateAgentState()
         }
-        startTimer()
+        startTimers()
     }
 
-    func startTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+    func startTimers() {
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.refresh()
             }
@@ -118,6 +120,41 @@ class AgyStatusModel: ObservableObject {
         stateTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.updateAgentState()
+            }
+        }
+
+        animTimer?.invalidate()
+        animTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self = self else { return }
+                if self.activeAgentState != .idle {
+                    self.animFrame = (self.animFrame + 1) % 2
+                } else if self.animFrame != 0 {
+                    self.animFrame = 0
+                }
+            }
+        }
+    }
+
+    var menuBarIcon: NSImage {
+        let isClaude = isClaudeSelected || selectedProfileForMenuBar == "All"
+        if isClaude {
+            switch activeAgentState {
+            case .idle:
+                return BrandIcons.clawdIdle
+            case .working:
+                return animFrame == 0 ? BrandIcons.clawdWork1 : BrandIcons.clawdWork2
+            case .waiting:
+                return animFrame == 0 ? BrandIcons.clawdIdle : BrandIcons.clawdJump
+            }
+        } else {
+            switch activeAgentState {
+            case .idle:
+                return BrandIcons.geminiIdle
+            case .working:
+                return animFrame == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiWork1
+            case .waiting:
+                return animFrame == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiJump
             }
         }
     }
