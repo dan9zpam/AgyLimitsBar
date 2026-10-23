@@ -13,7 +13,7 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(nsImage: model.menuBarIcon)
+            AnimatedAgentIcon(model: model, animator: model.animator)
             
             if let pct = model.criticalPercent {
                 Text("\(pct)%")
@@ -33,6 +33,26 @@ struct MenuBarLabel: View {
         if pct < 20 { return .orange }
         if pct < 50 { return .yellow }
         return .green
+    }
+}
+
+/// The only views subscribed to animation ticks, so a frame change redraws
+/// just the icon and not the popover around it.
+struct AnimatedAgentIcon: View {
+    let model: AgyStatusModel
+    @ObservedObject var animator: AgentAnimator
+    var fallback: NSImage? = nil
+    var animated: Bool = true
+
+    var body: some View {
+        Image(nsImage: animated || fallback == nil ? model.menuBarIcon : fallback!)
+    }
+}
+
+private struct CardsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -78,6 +98,31 @@ struct ContentView: View {
         }
     }
 
+    /// Keep the popover on screen: header, tabs and footer take ~150pt.
+    private static var maxContentHeight: CGFloat {
+        max(300, (NSScreen.main?.visibleFrame.height ?? 900) - 190)
+    }
+
+    private static var maxContentWidth: CGFloat {
+        max(340, min(900, (NSScreen.main?.visibleFrame.width ?? 1200) - 40))
+    }
+
+    private static let cardWidth: CGFloat = 260
+    private static let cardSpacing: CGFloat = 14
+
+    private var gridColumns: Int {
+        let fit = Int((Self.maxContentWidth - 28 + Self.cardSpacing) / (Self.cardWidth + Self.cardSpacing))
+        return max(1, min(filteredProfiles.count, fit))
+    }
+
+    private var gridWidth: CGFloat {
+        let n = CGFloat(gridColumns)
+        return max(340, n * Self.cardWidth + (n - 1) * Self.cardSpacing + 28)
+    }
+
+    // Estimate for the first frame until the grid is measured.
+    @State private var cardsHeight: CGFloat = 560
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
@@ -93,7 +138,9 @@ struct ContentView: View {
                         )
                         .frame(width: 28, height: 28)
                     
-                    Image(nsImage: selectedFilter == .claude ? (model.isClaudeSelected ? model.menuBarIcon : BrandIcons.clawdIdle) : (!model.isClaudeSelected ? model.menuBarIcon : BrandIcons.geminiIdle))
+                    // Static inside the popover: continuously animating views here
+                    // break scrolling and clicks; the menu bar icon carries the animation.
+                    Image(nsImage: selectedFilter == .claude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -117,16 +164,24 @@ struct ContentView: View {
                 .frame(width: 140)
                 .help("Выберите, чей процент показывать в меню-баре")
                 
-                Button(action: {
-                    Task { await model.refresh() }
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
-                        .rotationEffect(.degrees(model.isLoading ? 360 : 0))
-                        .animation(model.isLoading ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: model.isLoading)
+                // Native spinner while loading: a repeatForever SwiftUI rotation kept
+                // re-rendering the popover for the whole refresh.
+                if model.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                        .help("Обновление…")
+                } else {
+                    Button(action: {
+                        Task { await model.refresh() }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 16, height: 16)
+                    .help("Обновить квоты")
                 }
-                .buttonStyle(.plain)
-                .help("Обновить квоты")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -163,14 +218,33 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, minHeight: 180)
                 .padding(.vertical, 32)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 14) {
+                // Cards wrap into a grid that fits the screen width, so only vertical
+                // scrolling is ever needed (works with a plain mouse wheel too).
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(minimum: Self.cardWidth), spacing: Self.cardSpacing, alignment: .top),
+                            count: gridColumns
+                        ),
+                        alignment: .leading,
+                        spacing: Self.cardSpacing
+                    ) {
                         ForEach(filteredProfiles) { profileData in
                             ProfileCardView(profileData: profileData)
                         }
                     }
                     .padding(14)
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: CardsHeightKey.self, value: geo.size.height)
+                    })
                 }
+                // A vertical ScrollView has no height of its own and would collapse
+                // the popover: use the measured grid height, capped to the screen.
+                .frame(
+                    width: gridWidth,
+                    height: min(max(cardsHeight, 200), Self.maxContentHeight)
+                )
+                .onPreferenceChange(CardsHeightKey.self) { cardsHeight = $0 }
             }
 
             Divider()
@@ -195,6 +269,15 @@ struct ContentView: View {
                 .controlSize(.mini)
                 .help("Открыть agy в Terminal")
 
+                if model.monitorCLIPath != nil {
+                    Button("monitor") {
+                        model.openMonitor()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .help("Открыть полный Claude Code Usage Monitor в Terminal")
+                }
+
                 Spacer()
 
                 if let updated = model.lastUpdated {
@@ -214,7 +297,11 @@ struct ContentView: View {
             .padding(.vertical, 9)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
         }
-        .frame(minWidth: 340, idealWidth: CGFloat(max(340, min(860, max(1, filteredProfiles.count) * 280))), minHeight: 280)
+        // MenuBarExtra sizes its window from the content's fitting size. Flexible
+        // content reports 0x0 and leaves the window stuck at 340x280 with the
+        // header/footer pushed outside it, so pin the width and use ideal heights.
+        .frame(width: gridWidth)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -238,7 +325,7 @@ struct ProfileCardView: View {
                     .fill(profileData.isAuthenticated ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
                 
-                Image(nsImage: profileData.isClaude ? (model.isClaudeSelected ? model.menuBarIcon : BrandIcons.clawdIdle) : (!model.isClaudeSelected ? model.menuBarIcon : BrandIcons.geminiIdle))
+                Image(nsImage: profileData.isClaude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
 
                 Text(profileData.profile.displayName)
                     .font(.system(size: 13, weight: .bold))
@@ -287,6 +374,11 @@ struct ProfileCardView: View {
                         )
                     }
                 }
+            }
+
+            // claude-monitor analytics: cost, tokens, burn rate, pace, forecast, models
+            if profileData.isClaude && profileData.isAuthenticated {
+                MonitorAnalyticsView(accentColor: claudeAccent)
             }
 
             // Info Card (Credits for AGY / Account link for Claude)
@@ -338,7 +430,7 @@ struct ProfileCardView: View {
             }
         }
         .padding(12)
-        .frame(width: 260)
+        .frame(minWidth: 260, maxWidth: .infinity)
         .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

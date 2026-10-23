@@ -55,6 +55,15 @@ struct ProfileData: Identifiable {
     }
 }
 
+/// Animation state lives apart from the model: it ticks every 0.28s, and if the
+/// model published it the whole popover would re-render on every frame, which
+/// resets in-flight scrolling and the provider picker.
+@MainActor
+final class AgentAnimator: ObservableObject {
+    @Published var state: AgentState = .idle
+    @Published var frame: Int = 0
+}
+
 @MainActor
 class AgyStatusModel: ObservableObject {
     @Published var profilesData: [ProfileData] = []
@@ -62,8 +71,17 @@ class AgyStatusModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var lastError: String? = nil
     @Published var lastUpdated: Date? = nil
-    @Published var activeAgentState: AgentState = .idle
-    @Published var animFrame: Int = 0
+    let animator = AgentAnimator()
+    var activeAgentState: AgentState { animator.state }
+    private var animFrame: Int { animator.frame }
+
+    // claude-monitor integration: local analytics (cost, tokens, burn rate,
+    // forecast, models) and daily history for the Claude card.
+    @Published var monitorSnapshot: MonitorSnapshot? = nil
+    @Published var dailyUsage: [DailyUsage] = []
+    @Published var monitorCLIPath: String? = MonitorBridge.locateCLI()
+    private var lastDailyFetch: Date? = nil
+    private static let dailyRefreshInterval: TimeInterval = 300
 
     @Published var selectedProfileForMenuBar: String {
         didSet {
@@ -127,15 +145,35 @@ class AgyStatusModel: ObservableObject {
         animTimer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
-                if self.activeAgentState == .working {
-                    self.animFrame = (self.animFrame + 1) % 8
-                } else if self.activeAgentState == .waiting {
-                    self.animFrame = (self.animFrame + 1) % 2
-                } else if self.animFrame != 0 {
-                    self.animFrame = 0
+                let animator = self.animator
+                switch animator.state {
+                case .working:
+                    animator.frame = (animator.frame + 1) % 8
+                case .waiting:
+                    animator.frame = (animator.frame + 1) % 2
+                case .idle:
+                    // Idle Clawd blinks once every ~4.5s, or snores when out of limit.
+                    // Only publish real frame changes so an idle bar isn't redrawn per tick.
+                    self.idleTick = (self.idleTick + 1) % Self.idleCycle
+                    let frame = self.isClaudeLimitExhausted
+                        ? (self.idleTick / 4) % 2
+                        : (self.idleTick == Self.idleCycle - 1 ? 1 : 0)
+                    if frame != animator.frame { animator.frame = frame }
                 }
             }
         }
+        // Keep animating while the menu bar popover tracks events.
+        if let animTimer { RunLoop.main.add(animTimer, forMode: .common) }
+    }
+
+    private static let idleCycle = 16
+    private var idleTick = 0
+
+    /// Claude's 5-hour (or weekly) limit is used up: Clawd sleeps until the reset.
+    var isClaudeLimitExhausted: Bool {
+        guard isClaudeSelected || selectedProfileForMenuBar == "All" else { return false }
+        let entries = profilesData.first(where: { $0.isClaude })?.quotaEntries ?? []
+        return entries.contains { $0.percent == 0 }
     }
 
     var menuBarIcon: NSImage {
@@ -143,7 +181,10 @@ class AgyStatusModel: ObservableObject {
         if isClaude {
             switch activeAgentState {
             case .idle:
-                return BrandIcons.clawdIdle
+                if isClaudeLimitExhausted {
+                    return animFrame == 0 ? BrandIcons.clawdSleep1 : BrandIcons.clawdSleep2
+                }
+                return animFrame == 1 ? BrandIcons.clawdBlink : BrandIcons.clawdIdle
             case .working:
                 switch animFrame {
                 case 0: return BrandIcons.clawdThink1
@@ -171,19 +212,27 @@ class AgyStatusModel: ObservableObject {
     }
 
     func updateAgentState() {
-        if isClaudeSelected {
-            self.activeAgentState = Self.detectClaudeState()
-        } else if selectedProfileForMenuBar.hasPrefix("agy") {
-            self.activeAgentState = Self.detectAgyState()
-        } else {
-            let c = Self.detectClaudeState()
-            let a = Self.detectAgyState()
-            if c == .working || a == .working {
-                self.activeAgentState = .working
-            } else if c == .waiting || a == .waiting {
-                self.activeAgentState = .waiting
+        let selection = selectedProfileForMenuBar
+        // Detection reads session files and runs `ps`: keep it off the main thread.
+        Task.detached(priority: .utility) {
+            let state: AgentState
+            if selection == "claude" {
+                state = Self.detectClaudeState()
+            } else if selection.hasPrefix("agy") {
+                state = Self.detectAgyState()
             } else {
-                self.activeAgentState = .idle
+                let c = Self.detectClaudeState()
+                let a = Self.detectAgyState()
+                if c == .working || a == .working {
+                    state = .working
+                } else if c == .waiting || a == .waiting {
+                    state = .waiting
+                } else {
+                    state = .idle
+                }
+            }
+            await MainActor.run {
+                if state != self.animator.state { self.animator.state = state }
             }
         }
     }
@@ -338,9 +387,35 @@ class AgyStatusModel: ObservableObject {
             }
             return a.profile.name < b.profile.name
         }
+        // After Claude's /usage call (which refreshes Claude Code's usage cache) so
+        // the monitor's official limits are as fresh as the card's.
+        await refreshMonitor()
+
         lastUpdated = Date()
         isLoading = false
         updateAgentState()
+    }
+
+    func refreshMonitor() async {
+        monitorCLIPath = MonitorBridge.locateCLI()
+        guard let cli = monitorCLIPath else {
+            monitorSnapshot = nil
+            dailyUsage = []
+            return
+        }
+        if let snapshot = await MonitorBridge.fetchSnapshot(cliPath: cli) {
+            monitorSnapshot = snapshot
+        }
+        let dailyDue = lastDailyFetch.map { Date().timeIntervalSince($0) > Self.dailyRefreshInterval } ?? true
+        if dailyDue, let daily = await MonitorBridge.fetchDaily(cliPath: cli) {
+            dailyUsage = Array(daily.suffix(7))
+            lastDailyFetch = Date()
+        }
+    }
+
+    func openMonitor() {
+        guard let cli = monitorCLIPath else { return }
+        openTerminal(command: "'\(cli)'")
     }
 
     func openTerminal(command: String = "claude") {
@@ -466,8 +541,12 @@ class AgyStatusModel: ObservableObject {
             
             if let oauth = json["oauthAccount"] as? [String: Any], !oauth.isEmpty {
                 isAuthed = true
-                if let billing = oauth["billingType"] as? String {
-                    tier = billing.capitalized
+                // organizationType ("claude_pro", "claude_max", ...) names the plan;
+                // billingType ("apple_subscription", "stripe_subscription") only how it's paid.
+                if let org = oauth["organizationType"] as? String, org.hasPrefix("claude_") {
+                    tier = org.dropFirst("claude_".count).replacingOccurrences(of: "_", with: " ").capitalized
+                } else if let billing = oauth["billingType"] as? String {
+                    tier = billing.replacingOccurrences(of: "_", with: " ").capitalized
                 }
             }
 
@@ -505,44 +584,12 @@ class AgyStatusModel: ObservableObject {
     }
 
     nonisolated private static func runClaudeUsage(cliPath: String) async -> String? {
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: cliPath)
-                process.arguments = ["-p", "/usage"]
-
-                var env = ProcessInfo.processInfo.environment
-                env["HOME"] = NSHomeDirectory()
-                env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\(NSHomeDirectory())/.local/bin"
-                process.environment = env
-
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = pipe
-
-                do {
-                    try process.run()
-
-                    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
-                    timer.schedule(deadline: .now() + 10.0)
-                    timer.setEventHandler {
-                        if process.isRunning {
-                            process.terminate()
-                        }
-                    }
-                    timer.resume()
-
-                    process.waitUntilExit()
-                    timer.cancel()
-
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: data, encoding: .utf8)
-                    continuation.resume(returning: output)
-                } catch {
-                    continuation.resume(returning: nil)
-                }
-            }
-        }
+        // --no-session-persistence: without it every poll left a new transcript
+        // in ~/.claude/projects (one per minute).
+        await ProcessRunner.run(
+            cliPath, ["-p", "/usage", "--no-session-persistence"],
+            mergeStderr: true, timeout: 15
+        )?.text
     }
 
     nonisolated private static func parseClaudeJsonUtilization(_ util: [String: Any]) -> [QuotaEntry] {
@@ -667,12 +714,7 @@ class AgyStatusModel: ObservableObject {
             return formatRelative(d)
         }
 
-        let clean = str.replacingOccurrences(of: #"\s*\(.*?\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
-        let year = Calendar.current.component(.year, from: Date())
-        let fClaude = DateFormatter()
-        fClaude.locale = Locale(identifier: "en_US_POSIX")
-        fClaude.dateFormat = "yyyy MMM d 'at' h:mma"
-        if let d = fClaude.date(from: "\(year) \(clean)") {
+        if let d = parseClaudeReset(str) {
             return formatRelative(d)
         }
 
@@ -690,6 +732,52 @@ class AgyStatusModel: ObservableObject {
             }
         }
         return str
+    }
+
+    /// Claude Code's `/usage` reset times: "Oct 23 at 8:30pm (Europe/Moscow)",
+    /// "Oct 25, 2026 at 11:59pm", "8:30pm (Europe/Moscow)" or just "9pm".
+    nonisolated static func parseClaudeReset(_ str: String, now: Date = Date()) -> Date? {
+        let pattern = #"^(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\s*(?:\(([^)]+)\))?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        let text = str.trimmingCharacters(in: .whitespaces)
+        guard let m = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        func group(_ i: Int) -> String? {
+            guard let r = Range(m.range(at: i), in: text) else { return nil }
+            return String(text[r])
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = group(7).flatMap { TimeZone(identifier: $0) } ?? .current
+
+        guard var hour = group(4).flatMap(Int.init), (1...12).contains(hour) else { return nil }
+        let isPM = group(6)?.lowercased() == "pm"
+        if hour == 12 { hour = 0 }
+        if isPM { hour += 12 }
+
+        var comps = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour = hour
+        comps.minute = group(5).flatMap(Int.init) ?? 0
+
+        let hasDate = group(1) != nil
+        if let monthName = group(1) {
+            let symbols = DateFormatter()
+            symbols.locale = Locale(identifier: "en_US_POSIX")
+            let prefix = monthName.prefix(3).lowercased()
+            guard let month = symbols.shortMonthSymbols.firstIndex(where: { $0.lowercased() == prefix }) else { return nil }
+            comps.month = month + 1
+            comps.day = group(2).flatMap(Int.init)
+            if let year = group(3).flatMap(Int.init) { comps.year = year }
+        }
+
+        guard var date = calendar.date(from: comps) else { return nil }
+        if !hasDate, date < now.addingTimeInterval(-60) {
+            // A bare time that already passed today means tomorrow.
+            date = calendar.date(byAdding: .day, value: 1, to: date) ?? date
+        } else if hasDate, group(3) == nil, date < now.addingTimeInterval(-180 * 86400) {
+            // "Jan 2" seen in late December belongs to next year.
+            date = calendar.date(byAdding: .year, value: 1, to: date) ?? date
+        }
+        return date
     }
 
     nonisolated static func formatRelative(_ targetDate: Date) -> String {

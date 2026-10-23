@@ -199,6 +199,54 @@ struct BrandIcons {
         return img
     }()
 
+    // 11. Blink (idle, eyes shut for one frame)
+    static let clawdBlink: NSImage = {
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 16 168 124" width="24" height="18" shape-rendering="crispEdges">
+          <g transform="translate(8, 0)">
+            \(clawdBaseBody)
+            <rect x="56" y="82" width="8" height="4" fill="#141414"/>
+            <rect x="120" y="82" width="8" height="4" fill="#141414"/>
+          </g>
+        </svg>
+        """
+        let img = NSImage(data: svg.data(using: .utf8)!)!
+        img.size = NSSize(width: 22, height: 16)
+        return img
+    }()
+
+    // Pixel "z" whose top-left corner is (x, y), drawn with `px`-sized squares.
+    private static func pixelZ(x: Int, y: Int, px: Int) -> String {
+        let w = px * 4
+        return """
+        <rect x="\(x)" y="\(y)" width="\(w)" height="\(px)" fill="#9CA3AF"/>
+        <rect x="\(x + px * 2)" y="\(y + px)" width="\(px)" height="\(px)" fill="#9CA3AF"/>
+        <rect x="\(x + px)" y="\(y + px * 2)" width="\(px)" height="\(px)" fill="#9CA3AF"/>
+        <rect x="\(x)" y="\(y + px * 3)" width="\(w)" height="\(px)" fill="#9CA3AF"/>
+        """
+    }
+
+    // 12-13. Sleep (limit used up): eyes shut, "z" bubbles drift up while waiting for reset
+    private static func clawdSleep(bigZ: Bool) -> NSImage {
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 16 168 124" width="24" height="18" shape-rendering="crispEdges">
+          <g transform="translate(8, \(bigZ ? 2 : 0))">
+            \(clawdBaseBody)
+            <rect x="52" y="82" width="12" height="4" fill="#141414"/>
+            <rect x="116" y="82" width="12" height="4" fill="#141414"/>
+          </g>
+          \(pixelZ(x: 146, y: 42, px: 4))
+          \(bigZ ? pixelZ(x: 148, y: 16, px: 5) : "")
+        </svg>
+        """
+        let img = NSImage(data: svg.data(using: .utf8)!)!
+        img.size = NSSize(width: 22, height: 16)
+        return img
+    }
+
+    static let clawdSleep1: NSImage = clawdSleep(bigZ: false)
+    static let clawdSleep2: NSImage = clawdSleep(bigZ: true)
+
     // MARK: - Gemini (Official Google Gemini Sparkle)
     static let geminiIdle: NSImage = {
         let svg = """
