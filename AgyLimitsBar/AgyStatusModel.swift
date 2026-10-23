@@ -124,10 +124,12 @@ class AgyStatusModel: ObservableObject {
         }
 
         animTimer?.invalidate()
-        animTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
+        animTimer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
-                if self.activeAgentState != .idle {
+                if self.activeAgentState == .working {
+                    self.animFrame = (self.animFrame + 1) % 8
+                } else if self.activeAgentState == .waiting {
                     self.animFrame = (self.animFrame + 1) % 2
                 } else if self.animFrame != 0 {
                     self.animFrame = 0
@@ -143,7 +145,16 @@ class AgyStatusModel: ObservableObject {
             case .idle:
                 return BrandIcons.clawdIdle
             case .working:
-                return animFrame == 0 ? BrandIcons.clawdWork1 : BrandIcons.clawdWork2
+                switch animFrame {
+                case 0: return BrandIcons.clawdThink1
+                case 1: return BrandIcons.clawdThink2
+                case 2: return BrandIcons.clawdType1
+                case 3: return BrandIcons.clawdType2
+                case 4: return BrandIcons.clawdRunL1
+                case 5: return BrandIcons.clawdRunL2
+                case 6: return BrandIcons.clawdRunR1
+                default: return BrandIcons.clawdRunR2
+                }
             case .waiting:
                 return animFrame == 0 ? BrandIcons.clawdIdle : BrandIcons.clawdJump
             }
@@ -152,9 +163,9 @@ class AgyStatusModel: ObservableObject {
             case .idle:
                 return BrandIcons.geminiIdle
             case .working:
-                return animFrame == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiWork1
+                return animFrame % 2 == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiWork1
             case .waiting:
-                return animFrame == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiJump
+                return animFrame % 2 == 0 ? BrandIcons.geminiIdle : BrandIcons.geminiJump
             }
         }
     }

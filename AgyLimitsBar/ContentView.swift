@@ -93,7 +93,7 @@ struct ContentView: View {
                         )
                         .frame(width: 28, height: 28)
                     
-                    Image(nsImage: selectedFilter == .claude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
+                    Image(nsImage: selectedFilter == .claude ? (model.isClaudeSelected ? model.menuBarIcon : BrandIcons.clawdIdle) : (!model.isClaudeSelected ? model.menuBarIcon : BrandIcons.geminiIdle))
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -238,7 +238,7 @@ struct ProfileCardView: View {
                     .fill(profileData.isAuthenticated ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
                 
-                Image(nsImage: profileData.isClaude ? BrandIcons.clawdIdle : BrandIcons.geminiIdle)
+                Image(nsImage: profileData.isClaude ? (model.isClaudeSelected ? model.menuBarIcon : BrandIcons.clawdIdle) : (!model.isClaudeSelected ? model.menuBarIcon : BrandIcons.geminiIdle))
 
                 Text(profileData.profile.displayName)
                     .font(.system(size: 13, weight: .bold))
