@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum ViewFilter: String, CaseIterable, Identifiable {
+    case all = "Все"
+    case agy = "Antigravity"
+    case claude = "Claude"
+
+    var id: String { rawValue }
+}
+
 struct MenuBarLabel: View {
     @ObservedObject var model: AgyStatusModel
 
@@ -23,6 +31,11 @@ struct MenuBarLabel: View {
     }
 
     private var iconName: String {
+        if model.isClaudeSelected {
+            guard let pct = model.criticalPercent else { return "brain.head.profile" }
+            if pct == 0 { return "exclamationmark.triangle.fill" }
+            return "brain.head.profile"
+        }
         guard let pct = model.criticalPercent else { return "gauge.with.dots.needle.bottom.50percent" }
         if pct == 0 { return "exclamationmark.triangle.fill" }
         if pct < 20 { return "bolt.trianglebadge.exclamationmark.fill" }
@@ -40,6 +53,53 @@ struct MenuBarLabel: View {
 
 struct ContentView: View {
     @EnvironmentObject var model: AgyStatusModel
+    @State private var selectedFilter: ViewFilter = .all
+
+    private var filteredProfiles: [ProfileData] {
+        switch selectedFilter {
+        case .all:
+            return model.profilesData
+        case .agy:
+            return model.profilesData.filter { !$0.isClaude }
+        case .claude:
+            return model.profilesData.filter { $0.isClaude }
+        }
+    }
+
+    private var headerTitle: String {
+        switch selectedFilter {
+        case .all: return "AI Limits Bar"
+        case .agy: return "AGY Limits"
+        case .claude: return "Claude Limits"
+        }
+    }
+
+    private var headerSubtitle: String {
+        switch selectedFilter {
+        case .all: return "Antigravity & Claude Quota Monitor"
+        case .agy: return "Antigravity Quota Monitor"
+        case .claude: return "Claude Code Subscription Monitor"
+        }
+    }
+
+    private var headerGradientColors: [Color] {
+        switch selectedFilter {
+        case .all:
+            return [Color.blue, Color(red: 0.85, green: 0.44, blue: 0.28)]
+        case .agy:
+            return [Color.blue, Color.purple]
+        case .claude:
+            return [Color(red: 0.92, green: 0.48, blue: 0.28), Color.orange]
+        }
+    }
+
+    private var headerIcon: String {
+        switch selectedFilter {
+        case .all: return "sparkles"
+        case .agy: return "bolt.fill"
+        case .claude: return "brain.head.profile"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -49,36 +109,38 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(
                             LinearGradient(
-                                colors: [Color.blue, Color.purple],
+                                colors: headerGradientColors,
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
                         .frame(width: 28, height: 28)
                     
-                    Image(systemName: "bolt.fill")
+                    Image(systemName: headerIcon)
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("AGY Limits")
+                    Text(headerTitle)
                         .font(.system(size: 13, weight: .bold))
-                    Text("Antigravity Quota Monitor")
+                    Text(headerSubtitle)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
                 
                 Spacer()
                 
+                // Profile selector for Menu Bar
                 Picker("", selection: $model.selectedProfileForMenuBar) {
-                    Text("Все профили").tag("All")
+                    Text("Все (минимум)").tag("All")
                     ForEach(model.availableProfiles, id: \.name) { profile in
-                        Text(profile.name).tag(profile.name)
+                        Text(profile.displayName).tag(profile.name)
                     }
                 }
                 .pickerStyle(.menu)
-                .frame(width: 120)
+                .frame(width: 145)
+                .help("Выберите, чей процент показывать в меню-баре")
                 
                 Button(action: {
                     Task { await model.refresh() }
@@ -95,10 +157,21 @@ struct ContentView: View {
             .padding(.vertical, 12)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
 
+            // Provider Switcher Tabs
+            Picker("Провайдер", selection: $selectedFilter) {
+                ForEach(ViewFilter.allCases) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
             Divider()
 
             // Profiles Content
-            if model.profilesData.isEmpty && !model.isLoading {
+            if filteredProfiles.isEmpty && !model.isLoading {
                 VStack(spacing: 8) {
                     Image(systemName: "tray.fill")
                         .font(.system(size: 24))
@@ -117,7 +190,7 @@ struct ContentView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 14) {
-                        ForEach(model.profilesData) { profileData in
+                        ForEach(filteredProfiles) { profileData in
                             ProfileCardView(profileData: profileData)
                         }
                     }
@@ -128,16 +201,24 @@ struct ContentView: View {
             Divider()
 
             // Footer
-            HStack(spacing: 12) {
-                Button(action: {
-                    model.openTerminal()
-                }) {
-                    Label("CLI Терминал", systemImage: "terminal.fill")
-                        .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 10) {
+                Text("CLI:")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Button("agy") {
+                    model.openTerminal(command: "agy")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
                 .help("Открыть agy в Terminal")
+
+                Button("claude") {
+                    model.openTerminal(command: "claude")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Открыть claude в Terminal")
 
                 Spacer()
 
@@ -158,71 +239,136 @@ struct ContentView: View {
             .padding(.vertical, 9)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
         }
-        .frame(width: CGFloat(max(340, min(700, model.profilesData.count * 280))))
+        .frame(width: CGFloat(max(340, min(860, filteredProfiles.count * 280))))
     }
 }
 
 struct ProfileCardView: View {
+    @EnvironmentObject var model: AgyStatusModel
     let profileData: ProfileData
+
+    private var claudeAccent: Color {
+        Color(red: 0.85, green: 0.44, blue: 0.28)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Profile Title Bar
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(profileData.isAuthenticated ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
-                Text(profileData.profile.name)
+                
+                if profileData.isClaude {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(claudeAccent)
+                }
+
+                Text(profileData.profile.displayName)
                     .font(.system(size: 13, weight: .bold))
+
                 Spacer()
-                Text("активен")
+
+                Text(statusBadgeText)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
 
-            if profileData.quotaEntries.isEmpty {
+            if !profileData.isAuthenticated {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Аккаунт еще не авторизован")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    
+                    Button("Войти (\(profileData.profile.name))") {
+                        model.openTerminal(command: profileData.profile.name)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 8)
+            } else if profileData.quotaEntries.isEmpty {
                 Text("Квоты не найдены")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
-                // Group by Models
-                if !profileData.geminiEntries.isEmpty {
+                if profileData.isClaude {
                     ModelSectionView(
-                        title: "Gemini Models",
-                        icon: "sparkles",
-                        accentColor: Color.blue,
-                        entries: profileData.geminiEntries
-                    )
-                }
-
-                if !profileData.claudeAndGptEntries.isEmpty {
-                    ModelSectionView(
-                        title: "Claude & GPT",
+                        title: "Claude Code Limits",
                         icon: "brain.head.profile",
-                        accentColor: Color.purple,
-                        entries: profileData.claudeAndGptEntries
+                        accentColor: claudeAccent,
+                        entries: profileData.quotaEntries
                     )
+                } else {
+                    if !profileData.geminiEntries.isEmpty {
+                        ModelSectionView(
+                            title: "Gemini Models",
+                            icon: "sparkles",
+                            accentColor: Color.blue,
+                            entries: profileData.geminiEntries
+                        )
+                    }
+
+                    if !profileData.claudeAndGptEntries.isEmpty {
+                        ModelSectionView(
+                            title: "Claude & GPT",
+                            icon: "brain.head.profile",
+                            accentColor: Color.purple,
+                            entries: profileData.claudeAndGptEntries
+                        )
+                    }
                 }
             }
 
-            // Credits Card
-            HStack(spacing: 8) {
-                Image(systemName: "creditcard.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.purple)
-                Text("Кредиты")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(profileData.credits.remaining)")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(profileData.credits.remaining == 0 ? .secondary : .primary)
+            // Info Card (Credits for AGY / Account link for Claude)
+            if profileData.isClaude {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 11))
+                        .foregroundStyle(claudeAccent)
+                    Text("Тариф")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: {
+                        if let url = URL(string: profileData.credits.upgradeURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Text(profileData.tier.isEmpty ? "Активен" : profileData.tier)
+                                .font(.system(size: 11, weight: .semibold))
+                            Image(systemName: "arrow.up.forward.square")
+                                .font(.system(size: 9))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(claudeAccent)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(NSColor.separatorColor).opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "creditcard.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.purple)
+                    Text("Кредиты")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(profileData.credits.remaining)")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(profileData.credits.remaining == 0 ? .secondary : .primary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(NSColor.separatorColor).opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(NSColor.separatorColor).opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .padding(12)
         .frame(width: 260)
@@ -230,8 +376,18 @@ struct ProfileCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color(NSColor.separatorColor).opacity(0.2), lineWidth: 1)
+                .stroke(profileData.isClaude ? claudeAccent.opacity(0.3) : Color(NSColor.separatorColor).opacity(0.2), lineWidth: 1)
         )
+    }
+
+    private var statusBadgeText: String {
+        if !profileData.isAuthenticated {
+            return "требуется вход"
+        }
+        if profileData.isClaude && !profileData.tier.isEmpty {
+            return profileData.tier
+        }
+        return "активен"
     }
 }
 
@@ -292,7 +448,11 @@ struct QuotaBarRow: View {
     }
 
     private var labelName: String {
-        entry.isFiveHour ? "5-часовой лимит" : "Недельный лимит"
+        let low = entry.limitType.lowercased()
+        if low.contains("сессия") || low.contains("session") {
+            return "Сессия (5 часов)"
+        }
+        return entry.isFiveHour ? "5-часовой лимит" : "Недельный лимит"
     }
 
     var body: some View {
