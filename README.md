@@ -52,7 +52,7 @@ brew install --cask agylimit
 ### Способ 2: Скачать готовый релиз
 
 1. Перейдите в раздел [Releases](https://github.com/dan9zpam/AgyLimitsBar/releases/latest).
-2. Скачайте архив **`AgyLimitsBar-v1.1.0.zip`**.
+2. Скачайте архив **`AgyLimitsBar-v1.2.0.zip`**.
 3. Распакуйте и перетащите `AGY Limits Bar.app` в папку **Программы** (`/Applications`).
 4. Запустите приложение.
 
