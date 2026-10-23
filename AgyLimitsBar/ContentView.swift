@@ -1,9 +1,9 @@
 import SwiftUI
 
 enum ViewFilter: String, CaseIterable, Identifiable {
-    case all = "Все"
-    case agy = "Antigravity"
     case claude = "Claude"
+    case agy = "Antigravity"
+    case all = "Все"
 
     var id: String { rawValue }
 }
@@ -13,10 +13,11 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: iconName)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(statusColor)
-                .font(.system(size: 13, weight: .semibold))
+            AnimatedBrandIcon(
+                provider: model.isClaudeSelected ? "claude" : "agy",
+                state: model.activeAgentState,
+                size: 14
+            )
             
             if let pct = model.criticalPercent {
                 Text("\(pct)%")
@@ -30,18 +31,6 @@ struct MenuBarLabel: View {
         }
     }
 
-    private var iconName: String {
-        if model.isClaudeSelected {
-            guard let pct = model.criticalPercent else { return "brain.head.profile" }
-            if pct == 0 { return "exclamationmark.triangle.fill" }
-            return "brain.head.profile"
-        }
-        guard let pct = model.criticalPercent else { return "gauge.with.dots.needle.bottom.50percent" }
-        if pct == 0 { return "exclamationmark.triangle.fill" }
-        if pct < 20 { return "bolt.trianglebadge.exclamationmark.fill" }
-        return "bolt.circle.fill"
-    }
-
     private var statusColor: Color {
         guard let pct = model.criticalPercent else { return .secondary }
         if pct == 0 { return .red }
@@ -53,51 +42,43 @@ struct MenuBarLabel: View {
 
 struct ContentView: View {
     @EnvironmentObject var model: AgyStatusModel
-    @State private var selectedFilter: ViewFilter = .all
+    @State private var selectedFilter: ViewFilter = .claude
 
     private var filteredProfiles: [ProfileData] {
         switch selectedFilter {
-        case .all:
-            return model.profilesData
-        case .agy:
-            return model.profilesData.filter { !$0.isClaude }
         case .claude:
             return model.profilesData.filter { $0.isClaude }
+        case .agy:
+            return model.profilesData.filter { !$0.isClaude }
+        case .all:
+            return model.profilesData
         }
     }
 
     private var headerTitle: String {
         switch selectedFilter {
-        case .all: return "AI Limits Bar"
-        case .agy: return "AGY Limits"
         case .claude: return "Claude Limits"
+        case .agy: return "AGY Limits"
+        case .all: return "AI Limits Bar"
         }
     }
 
     private var headerSubtitle: String {
         switch selectedFilter {
-        case .all: return "Antigravity & Claude Quota Monitor"
-        case .agy: return "Antigravity Quota Monitor"
         case .claude: return "Claude Code Subscription Monitor"
+        case .agy: return "Gemini Quota Monitor"
+        case .all: return "Claude & Antigravity Quota Monitor"
         }
     }
 
     private var headerGradientColors: [Color] {
         switch selectedFilter {
-        case .all:
-            return [Color.blue, Color(red: 0.85, green: 0.44, blue: 0.28)]
-        case .agy:
-            return [Color.blue, Color.purple]
         case .claude:
             return [Color(red: 0.92, green: 0.48, blue: 0.28), Color.orange]
-        }
-    }
-
-    private var headerIcon: String {
-        switch selectedFilter {
-        case .all: return "sparkles"
-        case .agy: return "bolt.fill"
-        case .claude: return "brain.head.profile"
+        case .agy:
+            return [Color.blue, Color(red: 0.35, green: 0.55, blue: 0.95)]
+        case .all:
+            return [Color.blue, Color(red: 0.85, green: 0.44, blue: 0.28)]
         }
     }
 
@@ -116,9 +97,11 @@ struct ContentView: View {
                         )
                         .frame(width: 28, height: 28)
                     
-                    Image(systemName: headerIcon)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
+                    AnimatedBrandIcon(
+                        provider: selectedFilter == .claude ? "claude" : "agy",
+                        state: model.activeAgentState,
+                        size: 15
+                    )
                 }
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -133,13 +116,13 @@ struct ContentView: View {
                 
                 // Profile selector for Menu Bar
                 Picker("", selection: $model.selectedProfileForMenuBar) {
-                    Text("Все (минимум)").tag("All")
                     ForEach(model.availableProfiles, id: \.name) { profile in
                         Text(profile.displayName).tag(profile.name)
                     }
+                    Text("Все (минимум)").tag("All")
                 }
                 .pickerStyle(.menu)
-                .frame(width: 145)
+                .frame(width: 140)
                 .help("Выберите, чей процент показывать в меню-баре")
                 
                 Button(action: {
@@ -157,7 +140,7 @@ struct ContentView: View {
             .padding(.vertical, 12)
             .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
 
-            // Provider Switcher Tabs
+            // Provider Switcher Tabs (Claude first by default)
             Picker("Провайдер", selection: $selectedFilter) {
                 ForEach(ViewFilter.allCases) { filter in
                     Text(filter.rawValue).tag(filter)
@@ -206,19 +189,19 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                Button("agy") {
-                    model.openTerminal(command: "agy")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help("Открыть agy в Terminal")
-
                 Button("claude") {
                     model.openTerminal(command: "claude")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
                 .help("Открыть claude в Terminal")
+
+                Button("agy") {
+                    model.openTerminal(command: "agy")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Открыть agy в Terminal")
 
                 Spacer()
 
@@ -251,6 +234,10 @@ struct ProfileCardView: View {
         Color(red: 0.85, green: 0.44, blue: 0.28)
     }
 
+    private var geminiAccent: Color {
+        Color(red: 0.31, green: 0.51, blue: 0.93)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Profile Title Bar
@@ -259,11 +246,11 @@ struct ProfileCardView: View {
                     .fill(profileData.isAuthenticated ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
                 
-                if profileData.isClaude {
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(claudeAccent)
-                }
+                AnimatedBrandIcon(
+                    provider: profileData.isClaude ? "claude" : "agy",
+                    state: model.activeAgentState,
+                    size: 13
+                )
 
                 Text(profileData.profile.displayName)
                     .font(.system(size: 13, weight: .bold))
@@ -297,26 +284,18 @@ struct ProfileCardView: View {
                 if profileData.isClaude {
                     ModelSectionView(
                         title: "Claude Code Limits",
-                        icon: "brain.head.profile",
+                        icon: "claude",
                         accentColor: claudeAccent,
                         entries: profileData.quotaEntries
                     )
                 } else {
+                    // For AGY: Strictly output only Gemini limits as requested
                     if !profileData.geminiEntries.isEmpty {
                         ModelSectionView(
                             title: "Gemini Models",
-                            icon: "sparkles",
-                            accentColor: Color.blue,
+                            icon: "googlegemini",
+                            accentColor: geminiAccent,
                             entries: profileData.geminiEntries
-                        )
-                    }
-
-                    if !profileData.claudeAndGptEntries.isEmpty {
-                        ModelSectionView(
-                            title: "Claude & GPT",
-                            icon: "brain.head.profile",
-                            accentColor: Color.purple,
-                            entries: profileData.claudeAndGptEntries
                         )
                     }
                 }
@@ -355,7 +334,7 @@ struct ProfileCardView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "creditcard.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(geminiAccent)
                     Text("Кредиты")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -376,7 +355,7 @@ struct ProfileCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(profileData.isClaude ? claudeAccent.opacity(0.3) : Color(NSColor.separatorColor).opacity(0.2), lineWidth: 1)
+                .stroke(profileData.isClaude ? claudeAccent.opacity(0.3) : geminiAccent.opacity(0.2), lineWidth: 1)
         )
     }
 
@@ -400,9 +379,18 @@ struct ModelSectionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(accentColor)
+                if icon == "claude" {
+                    Image(nsImage: BrandIcons.claudeImage(size: 12))
+                        .renderingMode(.original)
+                } else if icon == "googlegemini" {
+                    Image(nsImage: BrandIcons.geminiImage(size: 12))
+                        .renderingMode(.original)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(accentColor)
+                }
+
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.primary)

@@ -62,19 +62,28 @@ class AgyStatusModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var lastError: String? = nil
     @Published var lastUpdated: Date? = nil
+    @Published var activeAgentState: AgentState = .idle
 
     @Published var selectedProfileForMenuBar: String {
         didSet {
             UserDefaults.standard.set(selectedProfileForMenuBar, forKey: "selectedProfileForMenuBar")
+            updateAgentState()
         }
     }
 
     private var timer: Timer?
+    private var stateTimer: Timer?
     private let agyCLIPath: String
     private let claudeCLIPath: String
 
     init() {
-        self.selectedProfileForMenuBar = UserDefaults.standard.string(forKey: "selectedProfileForMenuBar") ?? "All"
+        // Automatically default to claude on launch as requested
+        let saved = UserDefaults.standard.string(forKey: "selectedProfileForMenuBar")
+        if saved == nil || saved == "All" {
+            self.selectedProfileForMenuBar = "claude"
+        } else {
+            self.selectedProfileForMenuBar = saved ?? "claude"
+        }
         
         let agyCandidates = [
             "\(NSHomeDirectory())/.local/bin/agy",
@@ -90,7 +99,10 @@ class AgyStatusModel: ObservableObject {
         ]
         self.claudeCLIPath = claudeCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? "/opt/homebrew/bin/claude"
 
-        Task { await self.refresh() }
+        Task {
+            await self.refresh()
+            self.updateAgentState()
+        }
         startTimer()
     }
 
@@ -101,6 +113,99 @@ class AgyStatusModel: ObservableObject {
                 await self?.refresh()
             }
         }
+
+        stateTimer?.invalidate()
+        stateTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateAgentState()
+            }
+        }
+    }
+
+    func updateAgentState() {
+        if isClaudeSelected {
+            self.activeAgentState = Self.detectClaudeState()
+        } else if selectedProfileForMenuBar.hasPrefix("agy") {
+            self.activeAgentState = Self.detectAgyState()
+        } else {
+            let c = Self.detectClaudeState()
+            let a = Self.detectAgyState()
+            if c == .working || a == .working {
+                self.activeAgentState = .working
+            } else if c == .waiting || a == .waiting {
+                self.activeAgentState = .waiting
+            } else {
+                self.activeAgentState = .idle
+            }
+        }
+    }
+
+    nonisolated private static func detectClaudeState() -> AgentState {
+        let fm = FileManager.default
+        let sessionsDir = "\(NSHomeDirectory())/.claude/sessions"
+        guard let files = try? fm.contentsOfDirectory(atPath: sessionsDir) else {
+            return .idle
+        }
+        
+        var state: AgentState = .idle
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        
+        for f in files where f.hasSuffix(".json") {
+            let path = "\(sessionsDir)/\(f)"
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pid = json["pid"] as? Int32 else { continue }
+            
+            if kill(pid, 0) == 0 {
+                let status = (json["status"] as? String ?? "idle").lowercased()
+                let statusUpdated = json["statusUpdatedAt"] as? Double ?? 0
+                let ageSec = (nowMs - statusUpdated) / 1000.0
+                
+                if status == "working" || status == "busy" || status == "running" {
+                    return .working
+                }
+                if status == "idle" || status == "prompt" || status == "waiting" {
+                    if ageSec < 75 {
+                        state = .waiting
+                    }
+                }
+            }
+        }
+        return state
+    }
+
+    nonisolated private static func detectAgyState() -> AgentState {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-eo", "pid,pcpu,comm"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let out = String(data: data, encoding: .utf8) else { return .idle }
+            
+            var foundAgy = false
+            for line in out.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.contains("agy") && !trimmed.contains("AgyLimits") && !trimmed.contains("grep") {
+                    foundAgy = true
+                    let parts = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                    if parts.count >= 2, let cpu = Double(parts[1].replacingOccurrences(of: ",", with: ".")) {
+                        if cpu > 1.5 {
+                            return .working
+                        }
+                    }
+                }
+            }
+            if foundAgy {
+                return .waiting
+            }
+        } catch {
+            return .idle
+        }
+        return .idle
     }
 
     func loadProfiles() {
@@ -108,10 +213,16 @@ class AgyStatusModel: ObservableObject {
         let fm = FileManager.default
         let homeDir = URL(fileURLWithPath: NSHomeDirectory())
         
-        // 1. Default AGY profile
+        // 1. Add Claude profile first
+        let claudeConfig = "\(homeDir.path)/.claude.json"
+        if fm.isExecutableFile(atPath: claudeCLIPath) || fm.fileExists(atPath: claudeConfig) {
+            profiles.append(AgyProfile(name: "claude", homePath: homeDir.path, isClaude: true))
+        }
+
+        // 2. Default AGY profile
         profiles.append(AgyProfile(name: "agy", homePath: homeDir.path, isClaude: false))
         
-        // 2. Additional AGY profiles
+        // 3. Additional AGY profiles
         if let contents = try? fm.contentsOfDirectory(at: homeDir, includingPropertiesForKeys: nil) {
             for url in contents {
                 if url.lastPathComponent.hasPrefix(".agy-profile-") {
@@ -124,16 +235,8 @@ class AgyStatusModel: ObservableObject {
                 }
             }
         }
-        
-        var sorted = profiles.sorted { $0.name < $1.name }
 
-        // 3. Add Claude profile if Claude CLI or ~/.claude.json is found
-        let claudeConfig = "\(homeDir.path)/.claude.json"
-        if fm.isExecutableFile(atPath: claudeCLIPath) || fm.fileExists(atPath: claudeConfig) {
-            sorted.append(AgyProfile(name: "claude", homePath: homeDir.path, isClaude: true))
-        }
-
-        self.availableProfiles = sorted
+        self.availableProfiles = profiles
     }
 
     func refresh() async {
@@ -183,15 +286,16 @@ class AgyStatusModel: ObservableObject {
         
         self.profilesData = newProfilesData.sorted { a, b in
             if a.isClaude != b.isClaude {
-                return !a.isClaude
+                return a.isClaude // Claude first
             }
             return a.profile.name < b.profile.name
         }
         lastUpdated = Date()
         isLoading = false
+        updateAgentState()
     }
 
-    func openTerminal(command: String = "agy") {
+    func openTerminal(command: String = "claude") {
         let script = "tell application \"Terminal\" to do script \"\(command)\" activate"
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
@@ -262,7 +366,6 @@ class AgyStatusModel: ObservableObject {
                 
                 var env = ProcessInfo.processInfo.environment
                 env["HOME"] = homePath
-                // Prevents CLI from launching browser windows in background when auth is needed
                 env["AGY_CLI_INTERACTIVE_HEADLESS"] = "1"
                 process.environment = env
 
@@ -273,7 +376,6 @@ class AgyStatusModel: ObservableObject {
                 do {
                     try process.run()
 
-                    // Safety timeout: 12 seconds max
                     let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
                     timer.schedule(deadline: .now() + 12.0)
                     timer.setEventHandler {
@@ -309,7 +411,6 @@ class AgyStatusModel: ObservableObject {
         var isAuthed = false
         var tier = "Subscription"
 
-        // 1. Check ~/.claude.json for auth & cached usage
         var cachedEntries: [QuotaEntry] = []
         if fm.fileExists(atPath: configPath),
            let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
@@ -328,7 +429,6 @@ class AgyStatusModel: ObservableObject {
             }
         }
 
-        // 2. Run claude -p /usage for live data
         var liveEntries: [QuotaEntry] = []
         if fm.isExecutableFile(atPath: cliPath) {
             if let output = await runClaudeUsage(cliPath: cliPath) {
@@ -509,7 +609,6 @@ class AgyStatusModel: ObservableObject {
     }
 
     nonisolated static func friendlyReset(_ str: String) -> String {
-        // 1. ISO 8601 with fractional seconds
         let f1 = ISO8601DateFormatter()
         f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = f1.date(from: str) {
@@ -520,7 +619,6 @@ class AgyStatusModel: ObservableObject {
             return formatRelative(d)
         }
 
-        // 2. Claude CLI string: "Oct 23 at 3:09pm (Europe/Moscow)"
         let clean = str.replacingOccurrences(of: #"\s*\(.*?\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
         let year = Calendar.current.component(.year, from: Date())
         let fClaude = DateFormatter()
@@ -530,7 +628,6 @@ class AgyStatusModel: ObservableObject {
             return formatRelative(d)
         }
 
-        // 3. AGY CLI string: "2026-10-26 09:13 MSK"
         let parts = str.components(separatedBy: " ")
         if parts.count >= 2 {
             let dtPart = "\(parts[0]) \(parts[1])"
@@ -570,9 +667,15 @@ class AgyStatusModel: ObservableObject {
     var criticalPercent: Int? {
         let entries: [QuotaEntry]
         if selectedProfileForMenuBar == "All" {
-            entries = profilesData.filter { $0.isAuthenticated }.flatMap { $0.quotaEntries }
+            // For AGY profiles, only count Gemini limits!
+            entries = profilesData.filter { $0.isAuthenticated }.flatMap { p in
+                p.isClaude ? p.quotaEntries : p.geminiEntries
+            }
+        } else if selectedProfileForMenuBar == "claude" {
+            entries = profilesData.first(where: { $0.isClaude })?.quotaEntries ?? []
         } else {
-            entries = profilesData.first(where: { $0.profile.name == selectedProfileForMenuBar })?.quotaEntries ?? []
+            // AGY profile: strictly Gemini limits as requested
+            entries = profilesData.first(where: { $0.profile.name == selectedProfileForMenuBar })?.geminiEntries ?? []
         }
         let fiveHour = entries.filter { $0.isFiveHour }
         if !fiveHour.isEmpty {
